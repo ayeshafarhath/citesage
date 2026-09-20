@@ -1,109 +1,103 @@
-import os
-from pathlib import Path
+# Citesage - Multi-Document RAG with Cited Answers
 
-import streamlit as st
-from dotenv import load_dotenv
+![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=for-the-badge&logo=python)
+![LangChain](https://img.shields.io/badge/LangChain-0.3-1C3C6B?style=for-the-badge)
+![Groq](https://img.shields.io/badge/Groq-Llama_3.1_8B-FF6F61?style=for-the-badge)
+![FAISS](https://img.shields.io/badge/FAISS-Vector_DB-6A5ACD?style=for-the-badge)
+![Streamlit](https://img.shields.io/badge/Streamlit-App-FF4B4B?style=for-the-badge)
 
-from src.embed_store import build_vector_store, load_vector_store
-from src.generate import generate_answer
-from src.ingest import chunk_documents, load_documents
-from src.retrieve import retrieve_chunks
+Answer questions across multiple PDFs with verifiable support from the actual source documents, including filename and page number citations.
 
+## Problem
+Users often need answers from multiple PDFs, but standard file search is not enough. This project builds a simple multi-document retrieval pipeline that can read PDFs, embed them locally, retrieve and rank chunks, and generate cited answers with page-level references.
 
-load_dotenv()
+## Architecture
 
-PROJECT_ROOT = Path(__file__).resolve().parent
-DATA_DIR = PROJECT_ROOT / "data"
-INDEX_PATH = PROJECT_ROOT / "faiss_index"
+```mermaid
+graph TD
+    A[PDF Upload] --> B[PyPDFLoader]
+    B --> C[Recursive Splitter]
+    C --> D[MiniLM Embedding]
+    D --> E[FAISS]
+    E --> F[Retriever]
+    F --> G[Groq LLM]
+    G --> H[Answer + Sources]
+```
 
+## Tech Stack
+- Python
+- LangChain
+- PyPDF
+- Hugging Face sentence-transformers
+- FAISS
+- Groq Llama 3.1 8B
+- Streamlit
 
-def save_uploaded_pdfs(uploaded_files):
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
+## Project Structure
+```text
+citesage/
+├── data/
+├── src/
+│   ├── ingest.py
+│   ├── embed_store.py
+│   ├── retrieve.py
+│   ├── generate.py
+│   └── eval.py
+├── app.py
+├── requirements.txt
+├── .env.example
+├── .gitignore
+├── README.md
+├── .streamlit/
+│   └── config.toml
+└── faiss_index/
+```
 
-    saved_files = []
-    for uploaded_file in uploaded_files:
-        target_path = DATA_DIR / uploaded_file.name
-        target_path.write_bytes(uploaded_file.getvalue())
-        saved_files.append(target_path)
+## Setup
+1. Clone the repository
+2. Create a virtual environment
+3. Install dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
+4. Add your Groq API key:
+   ```bash
+   cp .env.example .env
+   ```
+   Then edit `.env` and set:
+   ```bash
+   GROQ_API_KEY=gsk_...
+   ```
+5. Put your PDF files into the `data/` folder
+6. Build the FAISS index:
+   ```bash
+   python src/ingest.py
+   ```
+7. Run the app:
+   ```bash
+   streamlit run app.py
+   ```
 
-    return saved_files
+## Sample Q&A
+Example:
+- Question: "What are the main risks mentioned in the documents?"
+- Answer: "The documents highlight ... "
+- Sources: `[report.pdf - page 2]`, `[notes.pdf - page 5]`
 
+## Limitations
+- Chunk size tuning can affect answer quality
+- Hallucination risk can still happen in edge cases
+- Small-scale local FAISS setup is fine for demos, not large enterprise corpora
+- Better evaluation would include RAGAS and a bigger benchmark set
 
-@st.cache_resource
-def get_vector_store(index_path):
-    return load_vector_store(str(index_path))
+## What I'd Improve
+- Tune chunk size and overlap
+- Add better grounding and citation validation
+- Add a richer evaluation harness with RAGAS
+- Scale storage and querying for larger document collections
 
+## Live Demo
+Coming soon.
 
-st.set_page_config(page_title="citesage", page_icon="📚", layout="wide")
-
-st.title("citesage")
-st.caption("Multi-document RAG with cited answers across PDFs")
-
-api_key = os.getenv("GROQ_API_KEY")
-if not api_key:
-    st.error("Missing GROQ_API_KEY. Add it to a .env file in the project root before running the app.")
-    st.stop()
-
-with st.sidebar:
-    st.header("Index Builder")
-    uploaded_files = st.file_uploader(
-        "Upload PDFs",
-        type=["pdf"],
-        accept_multiple_files=True,
-    )
-
-    if st.button("Build Index"):
-        if not uploaded_files:
-            st.warning("Please upload at least one PDF before building the index.")
-        else:
-            save_uploaded_pdfs(uploaded_files)
-            docs = load_documents(str(DATA_DIR))
-
-            if not docs:
-                st.error("No valid PDF files were found in the data folder.")
-            else:
-                chunks = chunk_documents(docs)
-                vector_store = build_vector_store(chunks, index_path=str(INDEX_PATH))
-                if vector_store is not None:
-                    st.success("Index built successfully. You can now ask questions.")
-                else:
-                    st.error("Index build failed.")
-
-    st.markdown("---")
-
-    if INDEX_PATH.exists() and any(INDEX_PATH.iterdir()):
-        st.success("Index ready.")
-    else:
-        st.info("Upload PDFs and build index first.")
-
-if not INDEX_PATH.exists() or not any(INDEX_PATH.iterdir()):
-    st.info("Upload PDFs and build index first")
-    st.stop()
-
-vector_store = get_vector_store(INDEX_PATH)
-if vector_store is None:
-    st.warning("No index found. Upload PDFs and build the index first.")
-    st.stop()
-
-question = st.text_input(
-    "Ask a question about your PDFs",
-    placeholder="What is the main topic across these documents?",
-)
-
-if question:
-    chunks = retrieve_chunks(question, vector_store, k=4)
-    answer = generate_answer(question, chunks, api_key=api_key)
-
-    st.subheader("Answer")
-    st.write(answer)
-
-    source_entries = []
-    for chunk in chunks:
-        filename = chunk.metadata.get("filename", "unknown.pdf")
-        page = chunk.metadata.get("page", 1)
-        source_entries.append(f"{filename} - page {page}")
-
-    if source_entries:
-        st.markdown("**Sources:**")
-        for source in source_entries:
-            st.write(f"- {source}")
+## Notes
+This project is intentionally lightweight and easy to run locally without paid APIs. The embedding model runs locally, and the LLM call uses Groq's free tier-compatible API.
