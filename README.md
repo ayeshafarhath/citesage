@@ -1,103 +1,88 @@
-# Citesage - Multi-Document RAG with Cited Answers
+import os
 
-![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=for-the-badge&logo=python)
-![LangChain](https://img.shields.io/badge/LangChain-0.3-1C3C6B?style=for-the-badge)
-![Groq](https://img.shields.io/badge/Groq-Llama_3.1_8B-FF6F61?style=for-the-badge)
-![FAISS](https://img.shields.io/badge/FAISS-Vector_DB-6A5ACD?style=for-the-badge)
-![Streamlit](https://img.shields.io/badge/Streamlit-App-FF4B4B?style=for-the-badge)
+from dotenv import load_dotenv
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_groq import ChatGroq
 
-Answer questions across multiple PDFs with verifiable support from the actual source documents, including filename and page number citations.
 
-## Problem
-Users often need answers from multiple PDFs, but standard file search is not enough. This project builds a simple multi-document retrieval pipeline that can read PDFs, embed them locally, retrieve relevant chunks, and generate answers with source citations.
+def _format_context(chunks):
+    if not chunks:
+        return ""
 
-## Architecture
+    parts = []
+    for idx, chunk in enumerate(chunks, start=1):
+        filename = chunk.metadata.get("filename", "unknown.pdf")
+        page = chunk.metadata.get("page", 1)
+        text = (chunk.page_content or "").strip()
+        if text:
+            parts.append(f"[Source {idx}: {filename} - page {page}]\n{text}")
+    return "\n\n".join(parts)
 
-```mermaid
-graph TD
-    A[PDF Upload] --> B[PyPDFLoader]
-    B --> C[Recursive Splitter]
-    C --> D[MiniLM Embedding]
-    D --> E[FAISS]
-    E --> F[Retriever]
-    F --> G[Groq LLM]
-    G --> H[Answer + Sources]
-```
 
-## Tech Stack
-- Python
-- LangChain
-- PyPDF
-- Hugging Face sentence-transformers
-- FAISS
-- Groq Llama 3.1 8B
-- Streamlit
+def _build_sources_line(chunks):
+    sources = []
+    for chunk in chunks[:4]:
+        filename = chunk.metadata.get("filename", "unknown.pdf")
+        page = chunk.metadata.get("page", 1)
+        sources.append(f"[{filename} - page {page}]")
+    return "Sources: " + ", ".join(sources)
 
-## Project Structure
-```text
-citesage/
-├── data/
-├── src/
-│   ├── ingest.py
-│   ├── embed_store.py
-│   ├── retrieve.py
-│   ├── generate.py
-│   └── eval.py
-├── app.py
-├── requirements.txt
-├── .env.example
-├── .gitignore
-├── README.md
-├── .streamlit/
-│   └── config.toml
-└── faiss_index/
-```
 
-## Setup
-1. Clone the repository
-2. Create a virtual environment
-3. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-4. Add your Groq API key:
-   ```bash
-   cp .env.example .env
-   ```
-   Then edit `.env` and set:
-   ```bash
-   GROQ_API_KEY=gsk_...
-   ```
-5. Put your PDF files into the `data/` folder
-6. Build the FAISS index:
-   ```bash
-   python src/ingest.py
-   ```
-7. Run the app:
-   ```bash
-   streamlit run app.py
-   ```
+def generate_answer(query, chunks, api_key=None):
+    if not chunks:
+        return "I don't have enough information in the provided documents."
 
-## Sample Q&A
-Example:
-- Question: "What are the main risks mentioned in the documents?"
-- Answer: "The documents highlight ... "
-- Sources: `[report.pdf - page 2]`, `[notes.pdf - page 5]`
+    question = (query or "").strip()
+    if not question:
+        return "I don't have enough information in the provided documents."
 
-## Limitations
-- Chunk size tuning can affect answer quality
-- Hallucination risk can still happen in edge cases
-- Small-scale local FAISS setup is fine for demos, not large enterprise corpora
-- Better evaluation would include RAGAS and a bigger benchmark set
+    load_dotenv()
+    key = api_key or os.getenv("GROQ_API_KEY")
+    if not key:
+        raise ValueError("GROQ_API_KEY is missing. Add it to your .env file.")
 
-## What I'd Improve
-- Tune chunk size and overlap
-- Add better grounding and citation validation
-- Add a richer evaluation harness with RAGAS
-- Scale storage and querying for larger document collections
+    llm = ChatGroq(
+        model_name="llama-3.1-8b-instant",
+        groq_api_key=key,
+        temperature=0.1,
+    )
 
-## Live Demo
-Coming soon.
+    context = _format_context(chunks)
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            (
+                "system",
+                """You are a retrieval-augmented answerer. Use only the information found in the provided source chunks.
+If the answer cannot be supported by the provided documents, say exactly:
+"I don't have enough information in the provided documents."
+Do not use outside knowledge. Keep the answer concise and factual.
+End the final answer with a line in this exact format:
+Sources: [filename - page X], [filename - page Y]
+""",
+            ),
+            (
+                "user",
+                "Question: {question}\n\nRelevant source chunks:\n{context}",
+            ),
+        ]
+    )
 
-## Notes
-This project is intentionally lightweight and easy to run locally without paid APIs. The embedding model runs locally, and the LLM call uses Groq's free tier-compatible API.
+    try:
+        response = llm.invoke(prompt.format(question=question, context=context))
+        answer = str(response.content).strip()
+    except Exception:
+        return "I don't have enough information in the provided documents."
+
+    if not answer:
+        return "I don't have enough information in the provided documents."
+
+    if "I don't have enough information in the provided documents." in answer.lower():
+        return answer
+
+    if "Sources:" not in answer:
+        answer = f"{answer.rstrip()}\n\n{_build_sources_line(chunks)}"
+
+    return answer.strip()
+
+
+__all__ = ["generate_answer"]
