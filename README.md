@@ -1,4 +1,4 @@
-# citesage - Multi-Document RAG with Cited Answers
+# Citesage - Multi-Document RAG with Cited Answers
 
 ![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=for-the-badge&logo=python)
 ![LangChain](https://img.shields.io/badge/LangChain-0.3-1C3C6B?style=for-the-badge)
