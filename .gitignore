@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Local vector store
+faiss_index/
+
+# Project data
+data/*.pdf
+
+# Editor / OS
+.DS_Store
+.vscode/
